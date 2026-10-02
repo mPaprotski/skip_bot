@@ -15,46 +15,6 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
-type button struct{ text, data string }
-
-func btn(text, data string) button { return button{text, data} }
-func (b *Bot) send(c tele.Context, text string, buttons ...button) error {
-	// Plain text avoids interpreting user-supplied Telegram formatting.
-	runes := []rune(text)
-	for {
-		limit := 0
-		units := 0
-		for limit < len(runes) {
-			width := 1
-			if runes[limit] > 0xffff {
-				width = 2
-			}
-			if units+width > 3500 {
-				break
-			}
-			units += width
-			limit++
-		}
-		if limit == len(runes) {
-			break
-		}
-		if e := c.Send(string(runes[:limit])); e != nil {
-			return e
-		}
-		runes = runes[limit:]
-	}
-	m := &tele.ReplyMarkup{}
-	var rows []tele.Row
-	for _, v := range buttons {
-		label := []rune(v.text)
-		if len(label) > 60 {
-			v.text = string(label[:59]) + "…"
-		}
-		rows = append(rows, m.Row(m.Data(v.text, "action", v.data)))
-	}
-	m.Inline(rows...)
-	return c.Send(string(runes), m)
-}
 func (b *Bot) handle(c tele.Context) error {
 	ctx, cancel := context.WithTimeout(b.ctx, 20*time.Second)
 	defer cancel()
@@ -94,13 +54,6 @@ func (b *Bot) handle(c tele.Context) error {
 	}
 	return nil
 }
-func (b *Bot) menu(c tele.Context, u *sqlite.User) error {
-	buttons := []button{btn("Меня не будет", "absent:0"), btn("Моя история", "history:0"), btn("Расписание", "view:0"), btn("Предметы", "subjects:0"), btn("Настройки", "settings")}
-	if u.Role == "admin" || u.Role == "owner" {
-		buttons = append(buttons, btn("Админ-панель", "admin"))
-	}
-	return b.send(c, "Главное меню", buttons...)
-}
 func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 	action := ""
 	text := strings.TrimSpace(c.Text())
@@ -133,6 +86,20 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			return b.send(c, "Неизвестная команда. Используйте /help.")
 		}
 	}
+	if action == "" && c.Callback() == nil {
+		if target, ok := menuActions[text]; ok {
+			action = target
+			if u.GroupID != nil && u.IsActive {
+				d, e := b.services.Draft(ctx, u.ID)
+				if e != nil {
+					return e
+				}
+				if d != nil {
+					return b.unfinished(c, d)
+				}
+			}
+		}
+	}
 	if action == "help" {
 		return b.send(c, "/start — подключение и меню\n/absent — отсутствие\n/mystats — история\n/settings — настройки\n/admin — управление\n/group — статистика\n/cancel — отменить диалог\n\nОтметки можно создавать, менять и отменять только до начала пары. Уважительная причина допускает комментарий. Время указано в часовом поясе группы.")
 	}
@@ -145,16 +112,16 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 				if e := b.services.SaveDraft(ctx, u.ID, &service.Draft{Kind: "setup"}); e != nil {
 					return e
 				}
-				return b.send(c, "Введите название группы для первоначальной настройки.")
+				return b.send(c, "👑 Настройка группы\n\nВведите название вашей учебной группы.")
 			}
-			return b.send(c, "Бот учёта посещаемости. Введите код приглашения, полученный у старосты.")
+			return b.send(c, "👋 Добро пожаловать в бот посещаемости!\n\nЗдесь можно посмотреть расписание и отметить отсутствие до начала пары.\n\n🔑 Введите код приглашения, полученный у старосты.")
 		}
 		d, e := b.services.Draft(ctx, u.ID)
 		if e != nil {
 			return e
 		}
 		if d != nil {
-			return b.renderDraft(ctx, c, u, d)
+			return b.unfinished(c, d)
 		}
 		return b.menu(c, u)
 	}
@@ -209,6 +176,17 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 		return strconv.ParseInt(parts[n], 10, 64)
 	}
 	switch key {
+	case "noop":
+		return nil
+	case "continue":
+		d, e := b.services.Draft(ctx, u.ID)
+		if e != nil {
+			return e
+		}
+		if d == nil {
+			return b.menu(c, u)
+		}
+		return b.renderDraft(ctx, c, u, d)
 	case "menu":
 		return b.menu(c, u)
 	case "cancel":
@@ -221,18 +199,18 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 		if e != nil {
 			return e
 		}
-		return b.send(c, fmt.Sprintf("Группа: %s\nЧасовой пояс: %s\nРоль: %s", g.Name, g.Timezone, map[string]string{"student": "студент", "admin": "администратор", "owner": "владелец"}[u.Role]), btn("Меню", "menu"))
+		return b.send(c, fmt.Sprintf("⚙️ Настройки\n\n👥 Группа: %s\n🕒 Часовой пояс: %s\n👤 Роль: %s", g.Name, g.Timezone, map[string]string{"student": "студент", "admin": "администратор", "owner": "владелец"}[u.Role]), btn("Меню", "menu"))
 	case "admin":
 		if _, e := b.services.Member(ctx, u.ID, true); e != nil {
 			return e
 		}
-		return b.send(c, "Админ-панель", btn("Предметы", "subjects:0"), btn("Добавить предмет", "subject_add"), btn("Расписание", "schedule:0"), btn("Добавить занятие", "schedule_add"), btn("Код приглашения", "invite"), btn("Статистика", "stats"), btn("Доступ и роли", "members:0"), btn("Меню", "menu"))
+		return b.send(c, "⚡ Панель администратора\n\nУправляйте расписанием, предметами и доступом к группе.", btn("Добавить занятие", "schedule_add"), btn("Расписание", "schedule:0"), btn("Предметы", "subjects:0"), btn("Добавить предмет", "subject_add"), btn("Доступ и роли", "members:0"), btn("Код приглашения", "invite"), btn("Статистика", "stats"), btn("Меню", "menu"))
 	case "invite", "rotate":
 		code, e := b.services.Invite(ctx, u.ID, key == "rotate")
 		if e != nil {
 			return e
 		}
-		return b.send(c, "Код приглашения: "+code, btn("Заменить код", "rotate"), btn("Назад", "admin"))
+		return b.send(c, "🔑 Код приглашения\n\n"+code+"\n\nПередайте этот код студентам для подключения к группе.", btn("Заменить код", "rotate"), btn("Назад", "admin"))
 	case "subjects":
 		page, e := arg(1)
 		if e != nil {
@@ -251,11 +229,21 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			if u.Role != "student" {
 				items = append(items, btn(sub.Name, fmt.Sprintf("subject:%d", sub.ID)))
 			} else {
-				items = append(items, btn(sub.Name, "menu"))
+				items = append(items, btn(sub.Name, fmt.Sprintf("subject_view:%d", sub.ID)))
 			}
 		}
 		items = append(items, pages("subjects", page, end < len(list))...)
-		return b.send(c, empty("Предметы", len(list)), items...)
+		return b.send(c, empty("📚 Предметы", len(list)), items...)
+	case "subject_view":
+		id, e := arg(1)
+		if e != nil {
+			return e
+		}
+		sub, e := b.services.Subject(ctx, u.ID, id)
+		if e != nil {
+			return e
+		}
+		return b.send(c, "📚 "+sub.Name+"\n\nПосмотреть занятия или отметить отсутствие можно в разделах ниже.", btn("Расписание", "view:0"), btn("🙋 Меня не будет", "absent:0"), btn("Назад", "subjects:0"))
 	case "subject":
 		if _, e := b.services.Member(ctx, u.ID, true); e != nil {
 			return e
@@ -323,7 +311,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			}
 		}
 		items = append(items, pages(key, page, end < len(list))...)
-		return b.send(c, empty("Расписание\n"+out.String(), len(list)), items...)
+		return b.send(c, empty("📅 Расписание\n\n"+out.String(), len(list)), items...)
 	case "lesson":
 		if _, e := b.services.Member(ctx, u.ID, true); e != nil {
 			return e
@@ -406,7 +394,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			items = append(items, btn(b.services.Describe(ctx, u.ID, t), fmt.Sprintf("mark:%d:%s", t.ID, date)))
 		}
 		items = append(items, pages("absent", page, end < len(active))...)
-		return b.send(c, empty("Выберите занятие на сегодня", len(active)), items...)
+		return b.send(c, empty("🙋 Меня не будет\n\nВыберите занятие на сегодня. Отметка доступна только до начала пары.", len(active)), items...)
 	case "mark", "change":
 		d := &service.Draft{Kind: "absent", Step: 1}
 		id, e := arg(1)
@@ -467,7 +455,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			}
 		}
 		items = append(items, pages("history", page, len(list) == 10)...)
-		return b.send(c, empty("Моя история\n"+out.String(), len(list)), items...)
+		return b.send(c, empty("📋 Моя история\n\n"+out.String(), len(list)), items...)
 	case "unmark":
 		id, e := arg(1)
 		if e != nil {
@@ -499,7 +487,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			items = append(items, btn(fmt.Sprintf("%s %s (%s)", m.FirstName, m.LastName, status), fmt.Sprintf("member:%d", m.ID)))
 		}
 		items = append(items, pages("members", page, end < len(list))...)
-		return b.send(c, "Участники группы", items...)
+		return b.send(c, "👥 Студенты и доступ\n\nВыберите участника для управления доступом и ролью.", items...)
 	case "member":
 		list, e := b.services.Members(ctx, u.ID)
 		if e != nil {
@@ -567,6 +555,7 @@ func pages(key string, page int64, more bool) []button {
 	if page > 0 {
 		items = append(items, btn("Предыдущая страница", fmt.Sprintf("%s:%d", key, page-1)))
 	}
+	items = append(items, btn(fmt.Sprintf("Стр. %d", page+1), "noop"))
 	if more {
 		items = append(items, btn("Следующая страница", fmt.Sprintf("%s:%d", key, page+1)))
 	}
@@ -574,7 +563,7 @@ func pages(key string, page int64, more bool) []button {
 }
 func empty(title string, count int) string {
 	if count == 0 {
-		return title + "\nСписок пуст."
+		return title + "\n\nПока нет записей в этом разделе."
 	}
 	return title
 }
@@ -590,7 +579,7 @@ func (b *Bot) renderDraft(ctx context.Context, c tele.Context, u *sqlite.User, d
 	text := ""
 	switch d.Kind {
 	case "subject":
-		text = "Введите название предмета (1–100 символов)."
+		text = "📚 Название предмета\n\nВведите название (от 1 до 100 символов)."
 	case "schedule":
 		switch d.Step {
 		case 1:
@@ -635,10 +624,10 @@ func (b *Bot) renderDraft(ctx context.Context, c tele.Context, u *sqlite.User, d
 		}
 	case "absent":
 		if d.Step == 1 {
-			text = "Выберите причину отсутствия"
+			text = "🙋 Причина отсутствия\n\nВыберите подходящий вариант."
 			items = append(items, btn("Уважительная", "reason:valid"), btn("Неуважительная", "reason:invalid"))
 		} else {
-			text = "Введите комментарий (до 500 символов) или пропустите."
+			text = "💬 Комментарий\n\nДобавьте пояснение (до 500 символов) или нажмите «Пропустить»."
 			items = append(items, btn("Без комментария", "skip"))
 		}
 	case "stats":
@@ -671,6 +660,12 @@ func (b *Bot) renderDraft(ctx context.Context, c tele.Context, u *sqlite.User, d
 		}
 	default:
 		return errors.New("Неизвестный диалог.")
+	}
+	if d.Kind == "schedule" {
+		text = fmt.Sprintf("📅 %s · шаг %d из 5\n\n%s", map[bool]string{true: "Изменение занятия", false: "Новое занятие"}[d.Schedule.ID != 0], d.Step, text)
+	}
+	if d.Kind == "stats" {
+		text = "📊 Статистика группы\n\n" + text
 	}
 	return b.send(c, text, items...)
 }
@@ -876,7 +871,7 @@ func (b *Bot) stats(ctx context.Context, c tele.Context, u *sqlite.User, d *serv
 		}
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "Статистика за %s\nВсего: %d · уважительных: %d · неуважительных: %d\n\n", d.Date, len(list), valid, len(list)-valid)
+	fmt.Fprintf(&out, "📊 Статистика за %s\nВсего: %d · уважительных: %d · неуважительных: %d\n\n", d.Date, len(list), valid, len(list)-valid)
 	type counts struct {
 		name           string
 		valid, invalid int
