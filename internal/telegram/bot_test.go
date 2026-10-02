@@ -136,9 +136,42 @@ func TestPrivateChatAndEndToEndDialogs(t *testing.T) {
 	if len(*messages) == 0 || !strings.Contains((*messages)[len(*messages)-1], "не переноси эту Н") {
 		t.Fatalf("missing required confirmation: %v", *messages)
 	}
+	// Today's report includes every subject directly, without a subject picker.
+	ctx := context.Background()
+	if e = b.services.SaveSubject(ctx, 1, 0, "Физика", false); e != nil {
+		t.Fatal(e)
+	}
+	subs, e = b.services.Subjects(ctx, 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var physicsID int64
+	for _, sub := range subs {
+		if sub.Name == "Физика" {
+			physicsID = sub.ID
+		}
+	}
+	friday := 5
+	physics := &sqlite.Schedule{SubjectID: physicsID, DayOfWeek: &friday, PairNumber: 2, StartTime: "10:00"}
+	if e = b.services.SaveSchedule(ctx, 1, physics); e != nil {
+		t.Fatal(e)
+	}
+	if e = b.services.Mark(ctx, 2, physics.ID, "2026-10-02", "invalid", ""); e != nil {
+		t.Fatal(e)
+	}
+	if e = b.services.Mark(ctx, 2, physics.ID, "2026-10-09", "valid", ""); e != nil {
+		t.Fatal(e)
+	}
 	send(1, "/group", "")
 	send(1, "", "stats_today")
-	send(1, "", "stats_all")
+	report := (*messages)[len(*messages)-1]
+	if !strings.Contains(report, "Всего: 2") || !strings.Contains(report, "Математика") || !strings.Contains(report, "Физика") || strings.Contains(report, "Выберите предмет") {
+		t.Fatalf("today must directly show all today's absences: %s", report)
+	}
+	draft, e := b.services.Draft(ctx, 1)
+	if e != nil || draft == nil || draft.Step != 3 || draft.Subject != 0 || draft.Date != "2026-10-02" || draft.Page != 0 {
+		t.Fatalf("incorrect today report state: %+v %v", draft, e)
+	}
 	if !strings.Contains((*messages)[len(*messages)-1], "уважительных: 1") {
 		t.Fatal("stats missing")
 	}

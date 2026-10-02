@@ -861,7 +861,8 @@ func (b *Bot) draftAction(ctx context.Context, c tele.Context, u *sqlite.User, d
 			return errors.New("Кнопка устарела.")
 		}
 		d.Date = b.services.Today(ctx, u.ID)
-		d.Step = 2
+		d.Subject = 0
+		d.Step = 3
 		d.Page = 0
 	case "stats_all":
 		if d.Kind != "stats" || d.Step != 2 {
