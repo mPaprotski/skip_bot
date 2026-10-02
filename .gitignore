@@ -1,0 +1,29 @@
+# Бинарные файлы
+/bot
+*.exe
+*.dll
+*.so
+*.dylib
+
+# База данных
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Переменные окружения
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Временные файлы
+tmp/
+*.tmp
