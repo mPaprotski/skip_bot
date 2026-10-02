@@ -204,7 +204,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 		if _, e := b.services.Member(ctx, u.ID, true); e != nil {
 			return e
 		}
-		return b.send(c, "⚡ Панель администратора\n\nУправляйте расписанием, предметами и доступом к группе.", btn("Добавить занятие", "schedule_add"), btn("Расписание", "schedule:0"), btn("Предметы", "subjects:0"), btn("Добавить предмет", "subject_add"), btn("Доступ и роли", "members:0"), btn("Код приглашения", "invite"), btn("Статистика", "stats"), btn("Меню", "menu"))
+		return b.send(c, "⚡ Панель администратора\n\nУправляйте расписанием, предметами и доступом к группе.", btn("Добавить занятие", "schedule_add"), btn("Расписание", "schedule:0"), btn("Управление расписанием", "manage_schedule:0"), btn("Предметы", "subjects:0"), btn("Добавить предмет", "subject_add"), btn("Доступ и роли", "members:0"), btn("Код приглашения", "invite"), btn("Статистика", "stats"), btn("Меню", "menu"))
 	case "invite", "rotate":
 		code, e := b.services.Invite(ctx, u.ID, key == "rotate")
 		if e != nil {
@@ -283,11 +283,35 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 		}
 		return b.send(c, "Предмет архивирован.", btn("Назад", "subjects:0"))
 	case "view", "schedule":
+		if _, e := b.services.Member(ctx, u.ID, false); e != nil {
+			return e
+		}
+		items := []button{}
+		for _, day := range []int{1, 2, 3, 4, 5, 6, 0} {
+			items = append(items, btn(scheduleWeekdays[day], fmt.Sprintf("schedule_day:%d:0", day)))
+		}
+		items = append(items, btn("Главное меню", "menu"))
+		return b.send(c, "📅 Расписание", items...)
+	case "schedule_day":
+		day, e := arg(1)
+		if e != nil {
+			return e
+		}
+		page, e := arg(2)
+		if e != nil {
+			return e
+		}
+		items, e := b.scheduleDayButtons(ctx, u.ID, day, page)
+		if e != nil {
+			return e
+		}
+		return b.send(c, "📅 Расписание", items...)
+	case "manage_schedule":
 		page, e := arg(1)
 		if e != nil {
 			return e
 		}
-		if key == "schedule" {
+		if key == "manage_schedule" {
 			if _, e = b.services.Member(ctx, u.ID, true); e != nil {
 				return e
 			}
@@ -306,7 +330,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 			desc := b.services.Describe(ctx, u.ID, t)
 			out.WriteString(desc)
 			out.WriteByte('\n')
-			if key == "schedule" {
+			if key == "manage_schedule" {
 				items = append(items, btn(desc, fmt.Sprintf("lesson:%d", t.ID)))
 			}
 		}
@@ -324,7 +348,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 		if e != nil {
 			return e
 		}
-		return b.send(c, b.services.Describe(ctx, u.ID, t), btn("Изменить все поля", fmt.Sprintf("edit:%d", id)), btn("Удалить", fmt.Sprintf("delete_ask:%d", id)), btn("Назад", "schedule:0"))
+		return b.send(c, b.services.Describe(ctx, u.ID, t), btn("Изменить все поля", fmt.Sprintf("edit:%d", id)), btn("Удалить", fmt.Sprintf("delete_ask:%d", id)), btn("Назад", "manage_schedule:0"))
 	case "delete_ask":
 		if _, e := b.services.Member(ctx, u.ID, true); e != nil {
 			return e
@@ -346,7 +370,7 @@ func (b *Bot) route(ctx context.Context, c tele.Context, u *sqlite.User) error {
 		if e = b.services.DeleteSchedule(ctx, u.ID, id); e != nil {
 			return e
 		}
-		return b.send(c, "Занятие удалено.", btn("Назад", "schedule:0"))
+		return b.send(c, "Занятие удалено.", btn("Назад", "manage_schedule:0"))
 	case "schedule_add", "edit":
 		d := &service.Draft{Kind: "schedule", Step: 1}
 		if key == "edit" {
@@ -624,7 +648,11 @@ func (b *Bot) renderDraft(ctx context.Context, c tele.Context, u *sqlite.User, d
 		}
 	case "absent":
 		if d.Step == 1 {
-			text = "🙋 Причина отсутствия\n\nВыберите подходящий вариант."
+			lesson, e := b.services.Schedule(ctx, u.ID, d.Schedule.ID)
+			if e != nil {
+				return e
+			}
+			text = "🙋 Причина отсутствия\n\n" + b.services.Describe(ctx, u.ID, lesson) + "\nДата: " + d.Date + "\n\nВыберите подходящий вариант."
 			items = append(items, btn("Уважительная", "reason:valid"), btn("Неуважительная", "reason:invalid"))
 		} else {
 			text = "💬 Комментарий\n\nДобавьте пояснение (до 500 символов) или нажмите «Пропустить»."

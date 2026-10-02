@@ -60,7 +60,7 @@ func TestMenuRoutingKeepsDraftAndEscapesContent(t *testing.T) {
 		t.Fatal("user content not escaped")
 	}
 	send("📅 Расписание", "")
-	if !strings.Contains((*messages)[len(*messages)-1], "Пока нет записей") {
+	if (*messages)[len(*messages)-1] != "<b>📅 Расписание</b>" {
 		t.Fatal("reply keyboard did not route to schedule")
 	}
 	send("", "subject_add")
