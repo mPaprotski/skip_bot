@@ -14,7 +14,8 @@ import (
 
 // Storage обёртка над sql.DB
 type Storage struct {
-	DB *sql.DB
+	DB     *sql.DB
+	Remote bool
 }
 
 // New создаёт новое подключение к SQLite
@@ -75,6 +76,7 @@ func (s *Storage) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 		return err
 	}
 
+	defer tx.Rollback()
 	if err := fn(tx); err != nil {
 		tx.Rollback()
 		return err

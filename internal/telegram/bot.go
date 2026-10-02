@@ -144,7 +144,11 @@ func (b *Bot) webhook(w http.ResponseWriter, r *http.Request) {
 
 // Run processes the persisted inbox sequentially; dialog steps cannot race.
 func (b *Bot) Run(ctx context.Context) {
-	tick := time.NewTicker(250 * time.Millisecond)
+	interval := 250 * time.Millisecond
+	if b.services.Storage.Remote {
+		interval = 3 * time.Second
+	}
+	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
 		select {

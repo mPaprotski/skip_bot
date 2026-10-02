@@ -16,6 +16,8 @@ type Config struct {
 	TelegramBotToken   string
 	OwnerTelegramID    int64
 	DatabasePath       string
+	TursoDatabaseURL   string
+	TursoAuthToken     string
 	GroupTimezone      string
 	LogLevel           string
 	WebhookURL         string
@@ -48,8 +50,19 @@ func Load() (*Config, error) {
 	cfg.OwnerTelegramID = ownerID
 
 	cfg.DatabasePath = os.Getenv("DATABASE_PATH")
-	if cfg.DatabasePath == "" {
-		return nil, fmt.Errorf("DATABASE_PATH is required")
+	cfg.TursoDatabaseURL = os.Getenv("TURSO_DATABASE_URL")
+	cfg.TursoAuthToken = os.Getenv("TURSO_AUTH_TOKEN")
+	if (cfg.TursoDatabaseURL == "") != (cfg.TursoAuthToken == "") {
+		return nil, fmt.Errorf("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set together")
+	}
+	if cfg.TursoDatabaseURL != "" {
+		u, err := url.Parse(cfg.TursoDatabaseURL)
+		if err != nil || (u.Scheme != "libsql" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			return nil, fmt.Errorf("TURSO_DATABASE_URL must be a libsql:// or https:// database URL without credentials or query parameters")
+		}
+	}
+	if cfg.DatabasePath == "" && cfg.TursoDatabaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_PATH is required for local SQLite")
 	}
 
 	cfg.GroupTimezone = os.Getenv("GROUP_TIMEZONE")
@@ -63,6 +76,9 @@ func Load() (*Config, error) {
 	}
 
 	cfg.WebhookURL = os.Getenv("WEBHOOK_URL")
+	if cfg.WebhookURL == "" {
+		cfg.WebhookURL = os.Getenv("RENDER_EXTERNAL_URL")
+	}
 	if cfg.WebhookURL == "" {
 		return nil, fmt.Errorf("WEBHOOK_URL is required for webhook mode")
 	}
@@ -79,7 +95,15 @@ func Load() (*Config, error) {
 
 	cfg.HTTPListenAddr = os.Getenv("HTTP_LISTEN_ADDR")
 	if cfg.HTTPListenAddr == "" {
-		cfg.HTTPListenAddr = ":8080"
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return nil, fmt.Errorf("PORT must be between 1 and 65535")
+		}
+		cfg.HTTPListenAddr = ":" + port
 	}
 
 	if cfg.OwnerTelegramID <= 0 {

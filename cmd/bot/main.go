@@ -35,16 +35,23 @@ func run() error {
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
-	store, e := sqlite.New(cfg.DatabasePath)
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelStartup()
+	var store *sqlite.Storage
+	if cfg.TursoDatabaseURL != "" {
+		store, e = sqlite.NewTurso(startupCtx, cfg.TursoDatabaseURL, cfg.TursoAuthToken)
+	} else {
+		store, e = sqlite.New(cfg.DatabasePath)
+	}
 	if e != nil {
-		return fmt.Errorf("SQLite: %w", e)
+		return fmt.Errorf("database initialization: %w", e)
 	}
 	defer store.Close()
 	list, e := migrate.LoadMigrationsFromFS(migrations.Files, ".")
 	if e != nil {
 		return e
 	}
-	if e = migrate.NewMigrator(store.DB, list).Migrate(context.Background()); e != nil {
+	if e = migrate.NewMigrator(store.DB, list).Migrate(startupCtx); e != nil {
 		return e
 	}
 	workerCtx, stopWorker := context.WithCancel(context.Background())
@@ -63,12 +70,6 @@ func run() error {
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- srv.Serve(listener) }()
 	defer srv.Close()
-	probeCtx, stopProbe := context.WithTimeout(apiCtx, 10*time.Second)
-	probeErr := telegram.CheckPublicURL(probeCtx, cfg.WebhookURL, http.DefaultClient)
-	stopProbe()
-	if probeErr != nil {
-		return probeErr
-	}
 	if e = bot.RegisterWebhook(); e != nil {
 		return e
 	}
